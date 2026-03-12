@@ -75,23 +75,22 @@ def safe_int(s: str) -> int:
 
 
 def open_csv_with_fallback(path: str):
-    """
-    Надёжно открывает CSV с автоопределением кодировки.
-    Читает весь файл целиком и пробует декодировать его
-    в нескольких кодировках.
-    """
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
     last_error = None
 
     with open(path, "rb") as f:
         raw = f.read()
 
+    logging.info(f"open_csv_with_fallback started | bytes={len(raw)}")
+
     for enc in encodings:
         try:
+            logging.info(f"Trying encoding: {enc}")
             text = raw.decode(enc)
             logging.info(f"CSV opened successfully with encoding: {enc}")
             return io.StringIO(text)
         except UnicodeDecodeError as e:
+            logging.exception(f"Failed encoding: {enc} | err={e}")
             last_error = e
 
     raise last_error
