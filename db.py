@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import io
 import logging
 import aiosqlite
 from typing import Dict, List, Optional, Tuple
@@ -50,17 +51,19 @@ FOUNDER_FIO_RE = re.compile(r"^founder_(\d+)_fio$")
 # Helpers
 # ----------------------------
 def split_phones(raw: str) -> List[str]:
-    """Разбиваем строку телефонов по частым разделителям."""
+    """Разбивает строку телефонов по частым разделителям."""
     if not raw:
         return []
+
     raw = raw.replace("\n", ",")
     raw = raw.replace(";", ",").replace("|", ",")
+
     parts = [p.strip() for p in raw.split(",")]
     return [p for p in parts if p]
 
 
 def phone_key(phone: str) -> str:
-    """Ключ для удаления дублей: оставляем только цифры."""
+    """Ключ для удаления дублей: только цифры."""
     return "".join(ch for ch in phone if ch.isdigit())
 
 
@@ -73,26 +76,23 @@ def safe_int(s: str) -> int:
 
 def open_csv_with_fallback(path: str):
     """
-    Пробуем открыть CSV в нескольких кодировках.
-    Это нужно, потому что inn.csv может приезжать не только в UTF-8.
+    Надёжно открывает CSV с автоопределением кодировки.
+    Читает весь файл целиком и пробует декодировать его
+    в нескольких кодировках.
     """
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
     last_error = None
 
+    with open(path, "rb") as f:
+        raw = f.read()
+
     for enc in encodings:
         try:
-            f = open(path, "r", encoding=enc, newline="")
-            # Пробуем реально прочитать кусок файла
-            f.read(2048)
-            f.seek(0)
+            text = raw.decode(enc)
             logging.info(f"CSV opened successfully with encoding: {enc}")
-            return f
+            return io.StringIO(text)
         except UnicodeDecodeError as e:
             last_error = e
-            try:
-                f.close()
-            except Exception:
-                pass
 
     raise last_error
 
@@ -123,11 +123,11 @@ async def get_meta(key: str) -> Optional[str]:
 
 def _discover_pairs(fieldnames: List[str]) -> Tuple[List[Tuple[str, Optional[str], str]], List[Tuple[str, Optional[str], str]]]:
     """
-    Ищем пары колонок:
+    Ищет пары колонок:
     - director_N_fio + director_N_phones
     - founder_N_fio + founder_N_phones
 
-    Возвращаем:
+    Возвращает:
       director_pairs: [(idx, fio_col_or_None, phones_col)]
       founder_pairs:  [(idx, fio_col_or_None, phones_col)]
     """
@@ -174,13 +174,6 @@ def _write_duplicates_report(inn_counts: Dict[str, int], duplicates: List[str]) 
 async def rebuild_db_from_csv():
     """
     Полная пересборка базы из CSV.
-    Делает:
-    - чтение CSV с автоопределением кодировки
-    - проверку наличия company_inn
-    - поиск колонок director_* и founder_*
-    - проверку дублей ИНН
-    - объединение строк с одинаковым ИНН
-    - сохранение данных в SQLite
     """
     if not os.path.exists(CSV_PATH):
         raise FileNotFoundError(f"Не найден файл {CSV_PATH}")
@@ -188,7 +181,7 @@ async def rebuild_db_from_csv():
     start_ts = time.time()
     logging.info("CSV rebuild started")
 
-    # Читаем CSV
+    # Читаем CSV с автоопределением кодировки
     with open_csv_with_fallback(CSV_PATH) as f:
         reader = csv.DictReader(f, delimiter=";")
         fieldnames = reader.fieldnames or []
@@ -203,7 +196,7 @@ async def rebuild_db_from_csv():
 
         rows = list(reader)
 
-    # Проверяем дубли ИНН
+    # Проверка дублей по ИНН
     inn_counts: Dict[str, int] = {}
     for row in rows:
         inn = (row.get("company_inn") or "").strip()
@@ -278,7 +271,7 @@ async def rebuild_db_from_csv():
 
         await db.commit()
 
-    # Сохраняем мета-информацию по файлу
+    # Обновляем метаданные
     mtime = str(int(os.path.getmtime(CSV_PATH)))
     await init_db()
     await set_meta("csv_mtime", mtime)
@@ -292,7 +285,7 @@ async def rebuild_db_from_csv():
 
 async def ensure_db_fresh():
     """
-    Проверяет, изменился ли inn.csv.
+    Проверяет, изменился ли файл inn.csv.
     Если изменился — пересобирает базу.
     """
     await init_db()
@@ -312,7 +305,7 @@ async def get_items_by_inn(inn: str) -> Optional[List[str]]:
     Возвращает:
     - None -> ИНН не найден
     - []   -> ИНН найден, но телефонов нет
-    - [..] -> список строк вида "ФИО: телефон"
+    - [..] -> список строк "ФИО: телефон"
     """
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT items_json FROM companies WHERE inn = ?", (inn,))
