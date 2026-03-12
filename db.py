@@ -3,19 +3,14 @@ import json
 import os
 import re
 import time
-import io
 import logging
 import aiosqlite
 from typing import Dict, List, Optional, Tuple
 
 from config import DB_PATH, CSV_PATH
 
+print("DB_PY_VERSION_STRICT_UTF8")
 
-print("DB_VERSION_CHECK_001")
-
-# ----------------------------
-# Logging
-# ----------------------------
 logging.basicConfig(
     level=logging.INFO,
     filename="logs.txt",
@@ -23,9 +18,6 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-# ----------------------------
-# DB schema
-# ----------------------------
 CREATE_COMPANIES_SQL = """
 CREATE TABLE IF NOT EXISTS companies (
     inn TEXT PRIMARY KEY,
@@ -40,9 +32,6 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
-# ----------------------------
-# Column patterns
-# ----------------------------
 DIRECTOR_PHONES_RE = re.compile(r"^director_(\d+)_phones$")
 DIRECTOR_FIO_RE = re.compile(r"^director_(\d+)_fio$")
 
@@ -50,11 +39,7 @@ FOUNDER_PHONES_RE = re.compile(r"^founder_(\d+)_phones$")
 FOUNDER_FIO_RE = re.compile(r"^founder_(\d+)_fio$")
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
 def split_phones(raw: str) -> List[str]:
-    """Разбивает строку телефонов по частым разделителям."""
     if not raw:
         return []
 
@@ -66,7 +51,6 @@ def split_phones(raw: str) -> List[str]:
 
 
 def phone_key(phone: str) -> str:
-    """Ключ для удаления дублей: только цифры."""
     return "".join(ch for ch in phone if ch.isdigit())
 
 
@@ -77,26 +61,33 @@ def safe_int(s: str) -> int:
         return 10**9
 
 
-def open_csv_with_fallback(path: str):
-    encodings = ["utf-8-sig", "cp1251", "cp866", "utf-8", "latin1"]
-    last_error = None
+def normalize_fieldnames(fieldnames: List[str]) -> List[str]:
+    result = []
+    for name in fieldnames:
+        if name is None:
+            result.append("")
+        else:
+            result.append(name.strip().replace("\ufeff", ""))
+    return result
 
-    with open(path, "rb") as f:
-        raw = f.read()
 
-    logging.info(f"open_csv_with_fallback started | bytes={len(raw)}")
+def open_csv_strict_utf8(path: str):
+    """
+    Открываем CSV только в UTF-8 / UTF-8 BOM.
+    Если файл не в этой кодировке — сразу понятная ошибка.
+    """
+    try:
+        return open(path, "r", encoding="utf-8-sig", newline="")
+    except UnicodeDecodeError as e:
+        raise UnicodeDecodeError(
+            e.encoding,
+            e.object,
+            e.start,
+            e.end,
+            "inn.csv must be saved in UTF-8 (or UTF-8 BOM). "
+            "Current file is not valid UTF-8."
+        )
 
-    for enc in encodings:
-        try:
-            logging.info(f"Trying encoding: {enc}")
-            text = raw.decode(enc)
-            logging.info(f"CSV opened successfully with encoding: {enc}")
-            return io.StringIO(text)
-        except UnicodeDecodeError as e:
-            logging.exception(f"Failed encoding: {enc} | err={e}")
-            last_error = e
-
-    raise last_error
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -123,15 +114,6 @@ async def get_meta(key: str) -> Optional[str]:
 
 
 def _discover_pairs(fieldnames: List[str]) -> Tuple[List[Tuple[str, Optional[str], str]], List[Tuple[str, Optional[str], str]]]:
-    """
-    Ищет пары колонок:
-    - director_N_fio + director_N_phones
-    - founder_N_fio + founder_N_phones
-
-    Возвращает:
-      director_pairs: [(idx, fio_col_or_None, phones_col)]
-      founder_pairs:  [(idx, fio_col_or_None, phones_col)]
-    """
     director_map: Dict[str, List[Optional[str]]] = {}
     founder_map: Dict[str, List[Optional[str]]] = {}
 
@@ -173,22 +155,26 @@ def _write_duplicates_report(inn_counts: Dict[str, int], duplicates: List[str]) 
 
 
 async def rebuild_db_from_csv():
-    """
-    Полная пересборка базы из CSV.
-    """
     if not os.path.exists(CSV_PATH):
         raise FileNotFoundError(f"Не найден файл {CSV_PATH}")
 
     start_ts = time.time()
     logging.info("CSV rebuild started")
 
-    # Читаем CSV с автоопределением кодировки
-    with open_csv_with_fallback(CSV_PATH) as f:
+    with open_csv_strict_utf8(CSV_PATH) as f:
         reader = csv.DictReader(f, delimiter=";")
-        fieldnames = reader.fieldnames or []
+
+        raw_fieldnames = reader.fieldnames or []
+        fieldnames = normalize_fieldnames(raw_fieldnames)
+        reader.fieldnames = fieldnames
+
+        if not fieldnames:
+            raise ValueError("CSV пустой или не удалось прочитать заголовки")
 
         if "company_inn" not in fieldnames:
-            raise ValueError("В CSV нет колонки company_inn")
+            raise ValueError(
+                f"В CSV нет колонки company_inn. Найдены колонки: {fieldnames[:20]}"
+            )
 
         director_pairs, founder_pairs = _discover_pairs(fieldnames)
 
@@ -197,7 +183,6 @@ async def rebuild_db_from_csv():
 
         rows = list(reader)
 
-    # Проверка дублей по ИНН
     inn_counts: Dict[str, int] = {}
     for row in rows:
         inn = (row.get("company_inn") or "").strip()
@@ -214,7 +199,6 @@ async def rebuild_db_from_csv():
         with open("duplicates_inn.txt", "w", encoding="utf-8") as rep:
             rep.write("Дубли ИНН не найдены.\n")
 
-    # Собираем данные по ИНН
     inn_to_items: Dict[str, List[str]] = {}
     inn_to_seenphones: Dict[str, set] = {}
 
@@ -226,39 +210,32 @@ async def rebuild_db_from_csv():
         items = inn_to_items.setdefault(inn, [])
         seen = inn_to_seenphones.setdefault(inn, set())
 
-        # Директора
         for _, fio_col, phones_col in director_pairs:
             fio = (row.get(fio_col) or "").strip() if fio_col else ""
             phones_raw = row.get(phones_col) or ""
 
             for ph in split_phones(phones_raw):
                 key = phone_key(ph)
-                if not key:
-                    continue
-                if key in seen:
+                if not key or key in seen:
                     continue
 
                 seen.add(key)
                 label = fio if fio else "Директор"
                 items.append(f"{label}: {ph.strip()}")
 
-        # Учредители
         for _, fio_col, phones_col in founder_pairs:
             fio = (row.get(fio_col) or "").strip() if fio_col else ""
             phones_raw = row.get(phones_col) or ""
 
             for ph in split_phones(phones_raw):
                 key = phone_key(ph)
-                if not key:
-                    continue
-                if key in seen:
+                if not key or key in seen:
                     continue
 
                 seen.add(key)
                 label = fio if fio else "Учредитель"
                 items.append(f"{label}: {ph.strip()}")
 
-    # Пересоздаём таблицу companies
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DROP TABLE IF EXISTS companies")
         await db.execute(CREATE_COMPANIES_SQL)
@@ -272,7 +249,6 @@ async def rebuild_db_from_csv():
 
         await db.commit()
 
-    # Обновляем метаданные
     mtime = str(int(os.path.getmtime(CSV_PATH)))
     await init_db()
     await set_meta("csv_mtime", mtime)
@@ -285,10 +261,6 @@ async def rebuild_db_from_csv():
 
 
 async def ensure_db_fresh():
-    """
-    Проверяет, изменился ли файл inn.csv.
-    Если изменился — пересобирает базу.
-    """
     await init_db()
 
     if not os.path.exists(CSV_PATH):
@@ -302,12 +274,6 @@ async def ensure_db_fresh():
 
 
 async def get_items_by_inn(inn: str) -> Optional[List[str]]:
-    """
-    Возвращает:
-    - None -> ИНН не найден
-    - []   -> ИНН найден, но телефонов нет
-    - [..] -> список строк "ФИО: телефон"
-    """
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT items_json FROM companies WHERE inn = ?", (inn,))
         row = await cur.fetchone()
