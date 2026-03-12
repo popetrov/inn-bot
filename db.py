@@ -10,6 +10,9 @@ from typing import Dict, List, Optional, Tuple
 
 from config import DB_PATH, CSV_PATH
 
+
+print("DB_VERSION_CHECK_001")
+
 # ----------------------------
 # Logging
 # ----------------------------
@@ -75,7 +78,7 @@ def safe_int(s: str) -> int:
 
 
 def open_csv_with_fallback(path: str):
-    encodings = ["utf-8-sig", "cp1251", "utf-8"]
+    encodings = ["utf-8-sig", "cp1251", "cp866", "utf-8", "latin1"]
     last_error = None
 
     with open(path, "rb") as f:
@@ -94,7 +97,6 @@ def open_csv_with_fallback(path: str):
             last_error = e
 
     raise last_error
-
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
