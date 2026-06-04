@@ -1,11 +1,14 @@
-# ====== Telegram ======
-BOT_TOKEN = "8623192862:AAFL0INyUNEDiprhwQb3zjSzvle63VG2bj8"
+import os
 
-# ====== Data files ======
-CSV_PATH = "inn.csv"       # файл обновляется ежедневно (кладёшь новый поверх старого)
-DB_PATH = "phones.db"      # SQLite база (создаётся автоматически)
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# ====== Access control (опционально) ======
-# Если нужно ограничить доступ к боту по Telegram user_id:
-USE_WHITELIST = False
-WHITELIST_USER_IDS = {123456789}  # сюда можно добавить свой user_id
+CSV_PATH = os.getenv("CSV_PATH", "inn.csv")
+DB_PATH = os.getenv("DB_PATH", "phones.db")
+
+USE_WHITELIST = os.getenv("USE_WHITELIST", "false").lower() == "true"
+
+WHITELIST_USER_IDS = {
+    int(x)
+    for x in os.getenv("WHITELIST_USER_IDS", "").split(",")
+    if x.strip()
+}
