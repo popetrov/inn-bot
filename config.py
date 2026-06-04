@@ -1,6 +1,6 @@
 import os
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+BOT_TOKEN = "8623192862:AAFyABLsnXuOhVO3IsdjkZjDPUkvc8k6OxA"
 
 CSV_PATH = os.getenv("CSV_PATH", "inn.csv")
 DB_PATH = os.getenv("DB_PATH", "phones.db")
