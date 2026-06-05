@@ -72,8 +72,15 @@ async def handle_inn(message: Message):
     await message.answer("Телефоны:\n" + "\n".join(items))
 
 async def main():
-    # При запуске тоже проверим актуальность базы (на случай, если inn.csv обновили ночью)
-    await ensure_db_fresh()
+    # ВАЖНО:
+    # Не пересобираем CSV-базу синхронно до запуска polling.
+    # На BotHost это может увести контейнер в restarting,
+    # если пересборка тяжелая или контейнеру не хватает памяти.
+    try:
+        await ensure_db_fresh()
+    except Exception as e:
+        logging.exception(f"startup_db_rebuild_failed | err={e}")
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
