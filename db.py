@@ -70,6 +70,14 @@ def safe_int(s: str) -> int:
     except Exception:
         return 10**9
 
+def normalize_fieldnames(fieldnames: List[str]) -> List[str]:
+    result = []
+    for name in fieldnames:
+        if name is None:
+            result.append("")
+        else:
+            result.append(name.strip().replace("\ufeff", ""))
+    return result
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
