@@ -143,107 +143,182 @@ def _write_duplicates_report(inn_counts: Dict[str, int], duplicates: List[str]) 
 
 
 async def rebuild_db_from_csv():
-    """
-    Full rebuild DB from CSV.
-    - Checks duplicates by company_inn and writes duplicates_inn.txt
-    - Merges multiple rows with same INN (unions phones)
-    - Stores list of strings 'ФИО: телефон' as JSON
-    """
     if not os.path.exists(CSV_PATH):
         raise FileNotFoundError(f"Не найден файл {CSV_PATH}")
 
     start_ts = time.time()
     logging.info("CSV rebuild started")
+    print("CSV rebuild started", flush=True)
 
-    # Read CSV fully into memory (needed for duplicate count + stable merge)
-    with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as f:
+    temp_db_path = DB_PATH + ".tmp"
+
+    if os.path.exists(temp_db_path):
+        os.remove(temp_db_path)
+
+    inn_to_items: Dict[str, List[str]] = {}
+    inn_to_seenphones: Dict[str, set] = {}
+    inn_counts: Dict[str, int] = {}
+
+    total_rows = 0
+    valid_inn_rows = 0
+    bad_inn_rows = 0
+
+    with open_csv_strict_utf8(CSV_PATH) as f:
         reader = csv.DictReader(f, delimiter=";")
-        fieldnames = reader.fieldnames or []
+
+        raw_fieldnames = reader.fieldnames or []
+        fieldnames = normalize_fieldnames(raw_fieldnames)
+        reader.fieldnames = fieldnames
+
+        if not fieldnames:
+            raise ValueError("CSV пустой или не удалось прочитать заголовки")
 
         if "company_inn" not in fieldnames:
-            raise ValueError("В CSV нет колонки company_inn")
+            raise ValueError(
+                f"В CSV нет колонки company_inn. Найдены колонки: {fieldnames[:20]}"
+            )
 
         director_pairs, founder_pairs = _discover_pairs(fieldnames)
-        if not director_pairs and not founder_pairs:
-            raise ValueError("Не найдены колонки director_*_phones и founder_*_phones")
 
-        rows = list(reader)
+        has_company_phones = "company_phones" in fieldnames
 
-    # Duplicate INN check
-    inn_counts: Dict[str, int] = {}
-    for row in rows:
-        inn = (row.get("company_inn") or "").strip()
-        if not inn:
-            continue
-        inn_counts[inn] = inn_counts.get(inn, 0) + 1
+        if not director_pairs and not founder_pairs and not has_company_phones:
+            raise ValueError(
+                "Не найдены телефонные колонки: company_phones, "
+                "director_*_phones или founder_*_phones"
+            )
 
-    duplicates = sorted([inn for inn, c in inn_counts.items() if c > 1])
+        for row in reader:
+            total_rows += 1
+
+            if total_rows % 5000 == 0:
+                msg = f"CSV rebuild progress | rows={total_rows} | inns={len(inn_to_items)}"
+                logging.info(msg)
+                print(msg, flush=True)
+
+            inn = (row.get("company_inn") or "").strip()
+
+            # Не валим сборку из-за плохих ИНН.
+            # Просто пропускаем строки, которые бот всё равно не сможет нормально искать.
+            if not inn or not inn.isdigit() or len(inn) not in (10, 12):
+                bad_inn_rows += 1
+                continue
+
+            valid_inn_rows += 1
+            inn_counts[inn] = inn_counts.get(inn, 0) + 1
+
+            items = inn_to_items.setdefault(inn, [])
+            seen = inn_to_seenphones.setdefault(inn, set())
+
+            # 1. Телефоны компании
+            if has_company_phones:
+                for ph in split_phones(row.get("company_phones") or ""):
+                    key = phone_key(ph)
+                    if not key or key in seen:
+                        continue
+
+                    seen.add(key)
+                    items.append(f"Компания: {ph.strip()}")
+
+            # 2. Телефоны директоров
+            for _, fio_col, phones_col in director_pairs:
+                fio = (row.get(fio_col) or "").strip() if fio_col else ""
+                phones_raw = row.get(phones_col) or ""
+
+                for ph in split_phones(phones_raw):
+                    key = phone_key(ph)
+                    if not key or key in seen:
+                        continue
+
+                    seen.add(key)
+                    label = fio if fio else "Директор"
+                    items.append(f"{label}: {ph.strip()}")
+
+            # 3. Телефоны учредителей
+            for _, fio_col, phones_col in founder_pairs:
+                fio = (row.get(fio_col) or "").strip() if fio_col else ""
+                phones_raw = row.get(phones_col) or ""
+
+                for ph in split_phones(phones_raw):
+                    key = phone_key(ph)
+                    if not key or key in seen:
+                        continue
+
+                    seen.add(key)
+                    label = fio if fio else "Учредитель"
+                    items.append(f"{label}: {ph.strip()}")
+
+    duplicates = sorted([inn for inn, count in inn_counts.items() if count > 1])
+
     if duplicates:
         _write_duplicates_report(inn_counts, duplicates)
         logging.warning(f"Найдены дубли ИНН: {len(duplicates)} шт. (см. duplicates_inn.txt)")
     else:
-        # если дублей нет, можно оставить старый файл или перезаписать пустым — перезапишем “чистым”
         with open("duplicates_inn.txt", "w", encoding="utf-8") as rep:
             rep.write("Дубли ИНН не найдены.\n")
 
-    # Merge rows by INN
-    inn_to_items: Dict[str, List[str]] = {}
-    inn_to_seenphones: Dict[str, set] = {}  # inn -> set(phone_key)
+    logging.info(
+        f"CSV parsed | rows={total_rows} | valid_inn_rows={valid_inn_rows} | "
+        f"bad_inn_rows={bad_inn_rows} | unique_inns={len(inn_to_items)}"
+    )
+    print(
+        f"CSV parsed | rows={total_rows} | valid_inn_rows={valid_inn_rows} | "
+        f"bad_inn_rows={bad_inn_rows} | unique_inns={len(inn_to_items)}",
+        flush=True,
+    )
 
-    for row in rows:
-        inn = (row.get("company_inn") or "").strip()
-        if not inn:
-            continue
-
-        items = inn_to_items.setdefault(inn, [])
-        seen = inn_to_seenphones.setdefault(inn, set())
-
-        # directors
-        for _, fio_col, phones_col in director_pairs:
-            fio = (row.get(fio_col) or "").strip() if fio_col else ""
-            phones_raw = row.get(phones_col) or ""
-            for ph in split_phones(phones_raw):
-                k = phone_key(ph)
-                if not k or k in seen:
-                    continue
-                seen.add(k)
-                label = fio if fio else "Директор"
-                items.append(f"{label}: {ph.strip()}")
-
-        # founders
-        for _, fio_col, phones_col in founder_pairs:
-            fio = (row.get(fio_col) or "").strip() if fio_col else ""
-            phones_raw = row.get(phones_col) or ""
-            for ph in split_phones(phones_raw):
-                k = phone_key(ph)
-                if not k or k in seen:
-                    continue
-                seen.add(k)
-                label = fio if fio else "Учредитель"
-                items.append(f"{label}: {ph.strip()}")
-
-    # Recreate companies table (safe rebuild)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DROP TABLE IF EXISTS companies")
+    # Собираем новую базу во временный файл.
+    async with aiosqlite.connect(temp_db_path) as db:
         await db.execute(CREATE_COMPANIES_SQL)
+        await db.execute(CREATE_META_SQL)
 
+        batch = []
         for inn, items in inn_to_items.items():
             items_json = json.dumps(items, ensure_ascii=False)
-            await db.execute(
+            batch.append((inn, items_json))
+
+            if len(batch) >= 1000:
+                await db.executemany(
+                    "INSERT INTO companies (inn, items_json) VALUES (?, ?)",
+                    batch,
+                )
+                await db.commit()
+                batch.clear()
+
+        if batch:
+            await db.executemany(
                 "INSERT INTO companies (inn, items_json) VALUES (?, ?)",
-                (inn, items_json),
+                batch,
             )
+            await db.commit()
+
+        mtime = str(int(os.path.getmtime(CSV_PATH)))
+
+        await db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("csv_mtime", mtime),
+        )
+        await db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("last_rebuild_ts", str(int(time.time()))),
+        )
 
         await db.commit()
 
-    # Save metadata (mtime)
-    mtime = str(int(os.path.getmtime(CSV_PATH)))
-    await init_db()
-    await set_meta("csv_mtime", mtime)
-    await set_meta("last_rebuild_ts", str(int(time.time())))
+    # Только теперь заменяем старую базу новой.
+    os.replace(temp_db_path, DB_PATH)
 
     elapsed = time.time() - start_ts
-    logging.info(f"CSV rebuild finished | inns={len(inn_to_items)} | duplicates={len(duplicates)} | seconds={elapsed:.2f}")
+    msg = (
+        f"CSV rebuild finished | inns={len(inn_to_items)} | "
+        f"duplicates={len(duplicates)} | bad_inn_rows={bad_inn_rows} | "
+        f"seconds={elapsed:.2f}"
+    )
+
+    logging.info(msg)
+    print(msg, flush=True)
 
 
 async def ensure_db_fresh():
