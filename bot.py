@@ -13,8 +13,10 @@ from db import ensure_db_fresh, get_items_by_inn
 # Логи пишем в файл logs.txt (в папке проекта)
 logging.basicConfig(
     level=logging.INFO,
-    filename="logs.txt",
-    filemode="a",
+    handlers=[
+        logging.FileHandler("logs.txt", mode="a", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
