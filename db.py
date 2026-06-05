@@ -63,6 +63,14 @@ def phone_key(phone: str) -> str:
     """Key for dedupe: digits only."""
     return "".join(ch for ch in phone if ch.isdigit())
 
+def normalize_fieldnames(fieldnames: List[str]) -> List[str]:
+    result = []
+    for name in fieldnames:
+        if name is None:
+            result.append("")
+        else:
+            result.append(name.strip().replace("\ufeff", ""))
+    return result
 
 def safe_int(s: str) -> int:
     try:
