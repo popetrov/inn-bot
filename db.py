@@ -141,6 +141,22 @@ def _write_duplicates_report(inn_counts: Dict[str, int], duplicates: List[str]) 
         for inn in duplicates:
             rep.write(f"{inn}; count={inn_counts.get(inn, 0)}\n")
 
+def open_csv_strict_utf8(path: str):
+    """
+    Открываем CSV только в UTF-8 / UTF-8 BOM.
+    Если файл не в этой кодировке — сразу понятная ошибка.
+    """
+    try:
+        return open(path, "r", encoding="utf-8-sig", newline="")
+    except UnicodeDecodeError as e:
+        raise UnicodeDecodeError(
+            e.encoding,
+            e.object,
+            e.start,
+            e.end,
+            "inn.csv must be saved in UTF-8 or UTF-8 BOM. "
+            "Current file is not valid UTF-8."
+        )
 
 async def rebuild_db_from_csv():
     if not os.path.exists(CSV_PATH):
