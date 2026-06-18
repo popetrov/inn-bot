@@ -175,6 +175,7 @@ def _write_duplicates_report(inn_counts: Dict[str, int], duplicates: List[str]) 
             rep.write(f"{inn}; count={inn_counts.get(inn, 0)}\n")
 
 def open_csv_strict_utf8(path: str):
+    return open(path, "r", encoding="utf-8-sig", errors="replace", newline="")
     """
     Открываем CSV только в UTF-8 / UTF-8 BOM.
     Если файл не в этой кодировке — сразу понятная ошибка.
