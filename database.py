@@ -72,6 +72,31 @@ def normalize_fieldnames(fieldnames: List[str]) -> List[str]:
             result.append(name.strip().replace("\ufeff", ""))
     return result
 
+
+def open_csv_strict_utf8(path: str):
+    """
+    Открываем CSV только в UTF-8 / UTF-8 BOM.
+    Если файл не в этой кодировке — сразу понятная ошибка.
+    """
+    try:
+        return open(path, "r", encoding="utf-8-sig", newline="")
+    except UnicodeDecodeError as e:
+        raise UnicodeDecodeError(
+            e.encoding,
+            e.object,
+            e.start,
+            e.end,
+            "inn.csv must be saved in UTF-8 or UTF-8 BOM. "
+            "Current file is not valid UTF-8."
+        )
+
+
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(CREATE_COMPANIES_SQL)
+        await db.execute(CREATE_META_SQL)
+        await db.commit()
+
 def safe_int(s: str) -> int:
     try:
         return int(s)
