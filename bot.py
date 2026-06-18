@@ -8,7 +8,7 @@ from config import BOT_TOKEN, USE_WHITELIST, WHITELIST_USER_IDS
 # ВАЖНО: твой готовый db.py должен содержать эти функции:
 # - ensure_db_fresh()  -> проверяет обновление inn.csv и обновляет БД
 # - get_items_by_inn() -> возвращает None (если ИНН не найден) или список строк "ФИО: телефон"
-from db import ensure_db_fresh, get_items_by_inn
+from database import ensure_db_fresh, get_items_by_inn
 
 # Логи пишем в файл logs.txt (в папке проекта)
 logging.basicConfig(
