@@ -52,25 +52,34 @@ def parse_contacts(rows):
 
 
 class DvkContacts:
-    def __init__(self, credentials_json, cache_path):
+    def __init__(self, credentials_json, cache_path, credentials_file=None):
         self.credentials_json = credentials_json
+        self.credentials_file = credentials_file
         self.cache_path = Path(cache_path)
 
     @classmethod
     def from_environment(cls):
         credentials_json = os.environ.get("DVK_GOOGLE_SERVICE_ACCOUNT_JSON")
-        if not credentials_json:
+        credentials_file = os.environ.get("DVK_GOOGLE_SERVICE_ACCOUNT_FILE")
+        if not credentials_json and not credentials_file:
             return None
         default_dir = Path("/app/data") if Path("/app/data").is_dir() else Path(".")
-        return cls(credentials_json, os.environ.get("DVK_CACHE_PATH") or default_dir / "dvk_contacts.db")
+        return cls(
+            credentials_json,
+            os.environ.get("DVK_CACHE_PATH") or default_dir / "dvk_contacts.db",
+            credentials_file,
+        )
 
     def sync(self):
         from google.auth.transport.requests import AuthorizedSession
         from google.oauth2.service_account import Credentials
 
-        credentials = Credentials.from_service_account_info(
-            json.loads(self.credentials_json), scopes=[SCOPE],
-        )
+        if self.credentials_file:
+            credentials = Credentials.from_service_account_file(self.credentials_file, scopes=[SCOPE])
+        else:
+            credentials = Credentials.from_service_account_info(
+                json.loads(self.credentials_json), scopes=[SCOPE],
+            )
         cells = quote("'База'!A:J", safe="")
         url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{cells}"
         with AuthorizedSession(credentials, refresh_timeout=15) as session:
