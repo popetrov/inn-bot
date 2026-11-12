@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import CommandStart
@@ -9,6 +10,7 @@ from config import BOT_TOKEN, USE_WHITELIST, WHITELIST_USER_IDS
 # - ensure_db_fresh()  -> проверяет обновление inn.csv и обновляет БД
 # - get_items_by_inn() -> возвращает None (если ИНН не найден) или список строк "ФИО: телефон"
 from db import ensure_db_fresh, get_items_by_inn
+from dvk_contacts import DvkContacts, contact_messages, merge_phones
 
 # Логи пишем в файл logs.txt (в папке проекта)
 logging.basicConfig(
@@ -24,6 +26,7 @@ def is_valid_inn(text: str) -> bool:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+dvk_contacts = DvkContacts.from_environment()
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -56,25 +59,39 @@ async def handle_inn(message: Message):
         await message.answer("Техническая ошибка. Попробуйте позже.")
         return
 
-    # 3 сценария ответа по ТЗ
-    if items is None:
+    additional_phones, usernames = [], []
+    if dvk_contacts is not None:
+        try:
+            additional_phones, usernames = await asyncio.to_thread(dvk_contacts.lookup, inn)
+        except Exception as error:
+            logging.warning("DVK lookup failed | error_type=%s", type(error).__name__)
+
+    phones = merge_phones(items, additional_phones)
+    if items is None and not phones and not usernames:
         logging.info(f"inn={inn} | result=A_not_found")
         await message.answer("ИНН не найден.")
         return
 
-    if not items:
+    if not phones and not usernames:
         logging.info(f"inn={inn} | result=B_no_phones")
         await message.answer("По данному ИНН номеров нет.")
         return
 
-    logging.info(f"inn={inn} | result=C_found | count={len(items)}")
-    # items уже содержит строки вида "ФИО: телефон"
-    await message.answer("Телефоны:\n" + "\n".join(items))
+    logging.info("inn=%s | result=C_found | phones=%d | usernames=%d", inn, len(phones), len(usernames))
+    for reply in contact_messages(phones, usernames):
+        await message.answer(reply)
 
 async def main():
     # При запуске тоже проверим актуальность базы (на случай, если inn.csv обновили ночью)
     await ensure_db_fresh()
-    await dp.start_polling(bot)
+    sync_task = asyncio.create_task(dvk_contacts.run()) if dvk_contacts is not None else None
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if sync_task is not None:
+            sync_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sync_task
 
 if __name__ == "__main__":
     asyncio.run(main())
