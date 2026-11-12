@@ -15,6 +15,12 @@ SPREADSHEET_ID = "1I_6u61p4fTMNqfZnbXS3kX3NKTJ7fJlL9JgXK4zDiPA"
 SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 USERNAME = re.compile(r"[A-Za-z0-9_]{5,32}")
 DEFAULT_INTERVAL = 900
+GENERIC_LABELS = {"компания", "директор", "учредитель", "контакт двк"}
+
+
+def has_name(item):
+    label, separator, _ = item.rpartition(": ")
+    return bool(separator and label.strip() and label.strip().casefold() not in GENERIC_LABELS)
 
 
 def parse_contacts(rows):
@@ -37,12 +43,17 @@ def parse_contacts(rows):
         for phone in split_phones(phones):
             key = phone_key(phone)
             if key:
-                entries["phones"].setdefault(key, f"{name or 'Контакт ДВК'}: {phone}")
+                current = entries["phones"].get(key)
+                if current is None or (name and not has_name(current)):
+                    entries["phones"][key] = f"{name or 'Контакт ДВК'}: {phone}"
         for raw in re.split(r"[\s,;|]+", usernames):
             username = re.sub(r"^(?:https?://)?(?:t\.me|telegram\.me)/", "", raw, flags=re.I)
             username = username.removeprefix("@")
             if USERNAME.fullmatch(username):
-                entries["usernames"].setdefault(username.lower(), f"@{username}")
+                key = username.lower()
+                current = entries["usernames"].get(key)
+                if current is None or (name and not has_name(current)):
+                    entries["usernames"][key] = f"{name}: @{username}" if name else f"@{username}"
 
     return {
         inn: (list(entries["phones"].values()), list(entries["usernames"].values()))
@@ -117,12 +128,14 @@ class DvkContacts:
 
 def merge_phones(existing, additional):
     merged = list(existing or ())
-    seen = {phone_key(item.rsplit(": ", 1)[-1]) for item in merged}
+    positions = {phone_key(item.rsplit(": ", 1)[-1]): index for index, item in enumerate(merged)}
     for item in additional:
         key = phone_key(item.rsplit(": ", 1)[-1])
-        if key not in seen:
-            seen.add(key)
+        if key not in positions:
+            positions[key] = len(merged)
             merged.append(item)
+        elif has_name(item) and not has_name(merged[positions[key]]):
+            merged[positions[key]] = item
     return merged
 
 
