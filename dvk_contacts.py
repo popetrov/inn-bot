@@ -60,7 +60,6 @@ def parse_contacts(rows):
     return {
         inn: (list(entries["phones"].values()), list(entries["usernames"].values()))
         for inn, entries in contacts.items()
-        if entries["phones"] or entries["usernames"]
     }
 
 
@@ -137,10 +136,10 @@ class DvkContacts:
 
     def lookup(self, inn):
         if not self.cache_path.is_file():
-            return [], []
+            return None
         with closing(sqlite3.connect(self.cache_path)) as db:
             row = db.execute("SELECT data FROM contacts WHERE inn = ?", (inn,)).fetchone()
-        return json.loads(row[0]) if row else ([], [])
+        return json.loads(row[0]) if row else None
 
 
 def merge_phones(existing, additional):
