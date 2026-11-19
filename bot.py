@@ -62,14 +62,18 @@ async def handle_inn(message: Message):
         return
 
     additional_phones, usernames = [], []
+    found_in_dvk = False
     if dvk_contacts is not None:
         try:
-            additional_phones, usernames = await asyncio.to_thread(dvk_contacts.lookup, inn)
+            dvk_result = await asyncio.to_thread(dvk_contacts.lookup, inn)
+            if dvk_result is not None:
+                found_in_dvk = True
+                additional_phones, usernames = dvk_result
         except Exception as error:
             logging.warning("DVK lookup failed | error_type=%s", type(error).__name__)
 
     phones = merge_phones(items, additional_phones)
-    if items is None and not phones and not usernames:
+    if items is None and not found_in_dvk and not phones and not usernames:
         logging.info(f"inn={inn} | result=A_not_found")
         await message.answer("ИНН не найден.")
         return
