@@ -27,21 +27,21 @@ def has_name(item):
 
 def parse_contacts(rows):
     headers = [str(value).strip().casefold() for value in rows[0]] if rows else []
-    required = ("инн", "фио", "сотовые", "username")
+    required = ("инн", "фио", "сотовые", "username", "e-mail")
     if any(headers.count(name) != 1 for name in required):
         raise ValueError("Unexpected DVK sheet headers")
     indices = [headers.index(name) for name in required]
 
     contacts = {}
     for row in rows[1:]:
-        inn, name, phones, usernames = (
+        inn, name, phones, usernames, emails = (
             str(row[index]).strip() if index < len(row) and row[index] is not None else ""
             for index in indices
         )
         if not re.fullmatch(r"(?:[0-9]{10}|[0-9]{12})", inn):
             continue
 
-        entries = contacts.setdefault(inn, {"phones": {}, "usernames": {}})
+        entries = contacts.setdefault(inn, {"phones": {}, "usernames": {}, "emails": {}})
         for phone in split_phones(phones):
             key = phone_key(phone)
             if key:
@@ -57,8 +57,15 @@ def parse_contacts(rows):
                 if current is None or (name and not has_name(current)):
                     entries["usernames"][key] = f"{name}: @{username}" if name else f"@{username}"
 
+        for raw in re.split(r"[\s,;|]+", emails):
+            email = raw.strip().removeprefix("mailto:")
+            if re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email):
+                entries["emails"].setdefault(
+                    email.casefold(), f"{name}: {email}" if name else email,
+                )
+
     return {
-        inn: (list(entries["phones"].values()), list(entries["usernames"].values()))
+        inn: (list(entries["phones"].values()), list(entries["usernames"].values()), list(entries["emails"].values()))
         for inn, entries in contacts.items()
     }
 
@@ -139,7 +146,12 @@ class DvkContacts:
             return None
         with closing(sqlite3.connect(self.cache_path)) as db:
             row = db.execute("SELECT data FROM contacts WHERE inn = ?", (inn,)).fetchone()
-        return json.loads(row[0]) if row else None
+        if row is None:
+            return None
+        data = json.loads(row[0])
+        if len(data) == 2:
+            data.append([])
+        return data
 
 
 def merge_phones(existing, additional):
@@ -155,7 +167,7 @@ def merge_phones(existing, additional):
     return merged
 
 
-def contact_messages(phones, usernames):
+def contact_messages(phones, usernames, emails=()):
     lines = []
     if phones:
         lines.extend(["Телефоны:", *phones])
@@ -163,6 +175,11 @@ def contact_messages(phones, usernames):
         if lines:
             lines.append("")
         lines.extend(["Telegram:", *usernames])
+
+    if emails:
+        if lines:
+            lines.append("")
+        lines.extend(["Email:", *emails])
 
     # Telegram limits message length. Keep contact lines together when possible.
     limit = 4000
