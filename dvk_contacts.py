@@ -1,11 +1,9 @@
-import asyncio
 import json
 import logging
 import os
 import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,8 +13,6 @@ from database import phone_key, split_phones
 SPREADSHEET_ID = "1I_6u61p4fTMNqfZnbXS3kX3NKTJ7fJlL9JgXK4zDiPA"
 SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 USERNAME = re.compile(r"[A-Za-z0-9_]{5,32}")
-SARATOV_TIME = timezone(timedelta(hours=4), name="Saratov")
-FIRST_SYNC_HOUR = 11
 GENERIC_LABELS = {"компания", "директор", "учредитель", "контакт двк"}
 
 
@@ -70,12 +66,6 @@ def parse_contacts(rows):
     }
 
 
-def next_sync_at(now):
-    now = now.astimezone(SARATOV_TIME)
-    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    return next_hour.replace(hour=max(next_hour.hour, FIRST_SYNC_HOUR))
-
-
 class DvkContacts:
     def __init__(self, credentials_json, cache_path, credentials_file=None):
         self.credentials_json = credentials_json
@@ -123,23 +113,6 @@ class DvkContacts:
                 ((inn, json.dumps(data, ensure_ascii=False)) for inn, data in contacts.items()),
             )
         logging.info("DVK sync succeeded | inns=%d", len(contacts))
-
-    async def run(self):
-        if not self.cache_path.is_file():
-            await self.sync_once()
-
-        while True:
-            now = datetime.now(SARATOV_TIME)
-            scheduled = next_sync_at(now)
-            logging.info("DVK next sync | saratov=%s", scheduled.isoformat())
-            await asyncio.sleep((scheduled - now).total_seconds())
-            await self.sync_once()
-
-    async def sync_once(self):
-        try:
-            await asyncio.to_thread(self.sync)
-        except Exception as error:
-            logging.warning("DVK sync failed | error_type=%s", type(error).__name__)
 
     def lookup(self, inn):
         if not self.cache_path.is_file():
