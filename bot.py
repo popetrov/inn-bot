@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from contextlib import suppress
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import CommandStart
@@ -97,14 +96,8 @@ async def main():
     except Exception as e:
         logging.exception(f"startup_db_rebuild_failed | err={e}")
 
-    sync_task = asyncio.create_task(dvk_contacts.run()) if dvk_contacts is not None else None
-    try:
-        await dp.start_polling(bot)
-    finally:
-        if sync_task is not None:
-            sync_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await sync_task
+    # Google data is published by the external workflow after contact files are verified.
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
