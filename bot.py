@@ -27,7 +27,7 @@ def is_valid_inn(text: str) -> bool:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-dvk_contacts = DvkContacts.from_environment()
+dvk_contacts = DvkContacts.from_environment() if USE_WHITELIST and WHITELIST_USER_IDS else None
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -62,7 +62,8 @@ async def handle_inn(message: Message):
 
     additional_phones, usernames, emails = [], [], []
     found_in_dvk = False
-    if dvk_contacts is not None:
+    if (dvk_contacts is not None and message.chat.type == "private"
+            and message.from_user is not None and message.from_user.id in WHITELIST_USER_IDS):
         try:
             dvk_result = await asyncio.to_thread(dvk_contacts.lookup, inn)
             if dvk_result is not None:
